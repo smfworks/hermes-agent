@@ -931,6 +931,63 @@ class TestSignalQuoteExtraction:
         assert event.reply_to_author_id == "other-author"
         assert event.reply_to_is_own_message is False
 
+    @pytest.mark.asyncio
+    async def test_handle_envelope_preserves_group_mentions_in_raw_message(self, monkeypatch):
+        """signal-cli mentions survive into raw_message so a pre_gateway_dispatch
+        plugin can tell '@bot where should we stay?' from 'where should we stay?'."""
+        adapter = _make_signal_adapter(monkeypatch, account="+155****4567",
+                                       group_allowed="group-test-id")
+        captured = {}
+
+        async def fake_handle(event):
+            captured["event"] = event
+
+        adapter.handle_message = fake_handle
+        mentions = [{"start": 0, "length": 1, "number": "+155****4567",
+                     "uuid": "bot-uuid"}]
+        await adapter._handle_envelope({
+            "envelope": {
+                "sourceNumber": "+155****1111",
+                "sourceUuid": "uuid-sender",
+                "sourceName": "Tester",
+                "timestamp": 1000000000,
+                "dataMessage": {
+                    "message": "\uFFFC where should we stay?",
+                    "groupInfo": {"groupId": "group-test-id", "groupName": "Plans"},
+                    "mentions": mentions,
+                },
+            }
+        })
+
+        # The bot's own @mention is stripped from text (require_mention handling),
+        # but the full mention list is preserved verbatim on raw_message.
+        event = captured["event"]
+        assert event.raw_message["mentions"] == mentions
+        # quote is absent here → raw_message still carries the (empty) key shape
+        assert event.raw_message["quote"] is None
+
+    @pytest.mark.asyncio
+    async def test_handle_envelope_raw_mentions_empty_when_none_present(self, monkeypatch):
+        """A DM with no mentions still exposes raw_message['mentions'] as [] so
+        plugins can do `raw_message.get('mentions', [])` without a KeyError guard."""
+        adapter = _make_signal_adapter(monkeypatch, account="+155****4567")
+        captured = {}
+
+        async def fake_handle(event):
+            captured["event"] = event
+
+        adapter.handle_message = fake_handle
+        await adapter._handle_envelope({
+            "envelope": {
+                "sourceNumber": "+155****1111",
+                "sourceName": "Tester",
+                "timestamp": 1000000000,
+                "dataMessage": {"message": "where should we stay?"},
+            }
+        })
+
+        assert captured["event"].raw_message["mentions"] == []
+
 
     @pytest.mark.asyncio
     async def test_track_sent_timestamp_keeps_reply_detection_cache_after_echo_discard(self, monkeypatch):
