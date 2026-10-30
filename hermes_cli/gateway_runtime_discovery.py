@@ -108,7 +108,9 @@ def socket_peer_uid(sock: socket.socket) -> int | None:
     (SO_PEERCRED on Linux, getpeereid on macOS); None where neither exists."""
     if hasattr(socket, "SO_PEERCRED"):
         import struct
-        return struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
+        # ucred is pid_t, uid_t, gid_t. "3i" wraps a uid_t >= 2**31, so the
+        # same user fails the os.getuid() check as unsafe_control_peer.
+        return struct.unpack("iII", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
     if sys.platform != "darwin":
         return None
     import ctypes
