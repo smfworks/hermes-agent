@@ -6,8 +6,12 @@ not what should be persisted in conversation history.
 
 from __future__ import annotations
 
+import logging
+import re
 import unicodedata
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # Exact whole-response markers meaning "the agent intentionally chose not to
 # reply". Keep small and explicit; arbitrary empty output remains an
@@ -42,6 +46,15 @@ PRODUCER_CARD_KINDS = frozenset({INTERNAL_NOTIFICATION_DISPLAY_KIND, *PRODUCER_N
 
 # Longer than any marker could plausibly be, even with stray punctuation.
 _MARKER_LENGTH_CAP = 64
+# Autonomous near-misses only. A free sentence is not a marker, and a two-character
+# CJK sentinel is too short to fuzzy-match without swallowing unrelated text.
+_FUZZY_SILENCE_CAP = 24
+_ASCII_SILENCE_MARKERS = tuple(
+    m for m in sorted(LIVE_GATEWAY_SILENT_MARKERS) if m.isascii()
+)
+_FUZZY_MARKER_SHAPED = re.compile(
+    r"^(?:\[[A-Z][A-Z_]{2,16}\]|[A-Z][A-Z_]{2,16}|NO [A-Z]{3,12})$"
+)
 
 
 def _canonical_silence_candidate(text: str) -> str:
@@ -145,6 +158,58 @@ class SilenceMarkerStreamHold:
         return out
 
 
+def _one_edit_or_swap(left: str, right: str) -> bool:
+    """True when ``left`` and ``right`` differ by one insert, delete, substitute, or adjacent swap.
+
+    Classic Levenshtein counts ``[SLIENT]`` as two edits. The typo we see is one swap.
+    """
+    if left == right:
+        return False
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        diffs = [i for i, (a, b) in enumerate(zip(left, right)) if a != b]
+        if len(diffs) == 1:
+            return True
+        return (
+            len(diffs) == 2
+            and diffs[1] == diffs[0] + 1
+            and left[diffs[0]] == right[diffs[1]]
+            and left[diffs[1]] == right[diffs[0]]
+        )
+    if len(left) > len(right):
+        left, right = right, left
+    i = 0
+    while i < len(left) and left[i] == right[i]:
+        i += 1
+    return left[i:] == right[i + 1:]
+
+
+def _is_autonomous_silence_near_miss(stripped: str, lines: list[str]) -> bool:
+    """True when the whole reply, or its own first or last line, is a one-edit marker."""
+    pieces: list[str] = []
+    for piece in (stripped, lines[0], lines[-1]):
+        if piece not in pieces:
+            pieces.append(piece)
+    for piece in pieces:
+        if len(piece) > _FUZZY_SILENCE_CAP:
+            continue
+        for candidate in _canonical_silence_candidates(piece):
+            if candidate in LIVE_GATEWAY_SILENT_MARKERS:
+                continue
+            if _FUZZY_MARKER_SHAPED.fullmatch(candidate) is None:
+                continue
+            for marker in _ASCII_SILENCE_MARKERS:
+                if _one_edit_or_swap(candidate, marker):
+                    logger.info(
+                        "autonomous silence near-miss suppressed: %r closest to %r",
+                        piece,
+                        marker,
+                    )
+                    return True
+    return False
+
+
 def is_autonomous_silence_response(response: Any) -> bool:
     """Loose silence matcher for autonomous lanes (cron, webhook).
 
@@ -153,6 +218,10 @@ def is_autonomous_silence_response(response: Any) -> bool:
     first/last line or the bracketed sentinel opens the response (``[SILENT] No
     changes detected``).  A token buried mid-sentence is still delivered.
     Shares :data:`LIVE_GATEWAY_SILENT_MARKERS` so the two sets cannot drift.
+
+    A short marker-shaped token one edit from an ASCII marker is silence too.
+    One edit is an insert, delete, substitute, or adjacent swap (``[SLIENT]``).
+    That near-miss is logged. Interactive matching stays exact.
     """
     stripped = response.strip() if isinstance(response, str) else ""
     if not stripped:
@@ -161,9 +230,11 @@ def is_autonomous_silence_response(response: Any) -> bool:
     # Bracketed form only for the prefix rule, so a bare "Silent retry succeeded" is NOT swallowed.
     # Same de-punctuating forms as the interactive rule, so ``【静默】`` / ``静默。`` cannot
     # be suppressed in chat yet delivered by cron.
-    return stripped.upper().startswith(_BRACKETED_SILENCE_MARKERS) or any(
+    if stripped.upper().startswith(_BRACKETED_SILENCE_MARKERS) or any(
         is_intentional_silence_response(c) for c in (stripped, lines[0], lines[-1])
-    )
+    ):
+        return True
+    return _is_autonomous_silence_near_miss(stripped, lines)
 
 
 def is_intentional_silence_agent_result(agent_result: dict | None, response: Any) -> bool:

@@ -41,3 +41,27 @@ def test_autonomous_lane_agrees_with_interactive_lane_on_cjk_punctuation_variant
     for variant in ("【静默】", "静默。", "【沉默】", "沉默。", "**[静默]**", "NO_REPLY."):
         assert is_intentional_silence_response(variant)
         assert is_autonomous_silence_response(variant) == is_intentional_silence_response(variant), variant
+
+
+def test_autonomous_lane_suppresses_one_edit_silence_typo(caplog):
+    """#147526: a transposition such as [SLIENT] is one edit, not classic Levenshtein 1.
+
+    Interactive chat stays exact. A short marker-shaped token on its own, or on its own
+    first or last line, is silence. Prose that merely contains the typo is delivered.
+    """
+    import logging
+
+    caplog.set_level(logging.INFO, logger="gateway.response_filters")
+    for token in ("[SLIENT]", "SLIENT", "NO RELPY", "[SLIENT]."):
+        assert not is_intentional_silence_response(token), token
+        assert is_autonomous_silence_response(token), token
+    assert is_autonomous_silence_response("inbox unchanged\n\n[SLIENT]")
+    assert is_autonomous_silence_response("[SLIENT]\n\nnothing new")
+    assert not is_autonomous_silence_response("status: [SLIENT] was the previous leak")
+    assert not is_autonomous_silence_response("Silent retry succeeded")
+    assert not is_autonomous_silence_response("CLIENT")
+    assert not is_autonomous_silence_response("[CLIENT]")
+    assert not is_autonomous_silence_response("NOTHING NEW")
+    assert not is_autonomous_silence_response("NO PROBLEM")
+    assert not is_autonomous_silence_response("静默X")
+    assert any("[SLIENT]" in rec.message for rec in caplog.records)
