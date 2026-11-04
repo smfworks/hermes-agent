@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from hermes_cli.web_deps import late
 from hermes_cli.config import cfg_get
 from hermes_cli.web_server_cron import (
-    _create_cron_job_sync, _cron_optional_text, _cron_string_list, _mutate_cron_for_profile, _normalize_dashboard_cron_script, _raise_if_cron_registration_error, _run_cron_dashboard_io, _validate_dashboard_cron_context_from, _validate_dashboard_cron_effective_job,
+    _create_cron_job_sync, _cron_enabled_toolsets, _cron_optional_text, _cron_string_list, _mutate_cron_for_profile, _normalize_dashboard_cron_script, _raise_if_cron_registration_error, _run_cron_dashboard_io, _validate_dashboard_cron_context_from, _validate_dashboard_cron_effective_job,
 )
 from hermes_cli.web_models import AutomationBlueprintInstantiate, CronJobCreate, CronJobUpdate
 from hermes_cli.web_routers._common import log as _log
@@ -72,9 +72,11 @@ def _normalize_dashboard_cron_updates(updates: dict[str, Any], profile_home: Pat
         # Same normalization as deliver, but empty CLEARS the override (failures
         # fall back to deliver) rather than coalescing — the field is optional.
         normalized["failure_deliver"] = _cron_optional_text(normalized["failure_deliver"])
-    for key in ("context_from", "enabled_toolsets"):
-        if key in normalized:
-            normalized[key] = _cron_string_list(normalized[key])
+    if "context_from" in normalized:
+        # [] → None is correct here: no extra context jobs, not a stored allowlist.
+        normalized["context_from"] = _cron_string_list(normalized["context_from"])
+    if "enabled_toolsets" in normalized:
+        normalized["enabled_toolsets"] = _cron_enabled_toolsets(normalized["enabled_toolsets"])
     return normalized
 
 

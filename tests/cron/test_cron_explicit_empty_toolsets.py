@@ -79,3 +79,46 @@ def test_cronjob_tool_roundtrip_preserves_explicit_empty(hermes_env):
 
     job = get_job(result["job_id"])
     assert job is not None and job["enabled_toolsets"] == []
+
+
+def test_dashboard_normalize_preserves_explicit_empty_allowlist(tmp_path):
+    from hermes_cli.web_routers.cron import _normalize_dashboard_cron_updates
+
+    out = _normalize_dashboard_cron_updates(
+        {"prompt": "format this better", "enabled_toolsets": []}, tmp_path)
+    assert out["enabled_toolsets"] == []
+    assert out["prompt"] == "format this better"
+
+    named = _normalize_dashboard_cron_updates({"enabled_toolsets": ["terminal"]}, tmp_path)
+    assert named["enabled_toolsets"] == ["terminal"]
+
+
+def test_dashboard_still_collapses_empty_context_from(tmp_path):
+    from hermes_cli.web_routers.cron import _normalize_dashboard_cron_updates
+
+    out = _normalize_dashboard_cron_updates({"context_from": []}, tmp_path)
+    assert out["context_from"] is None
+
+
+def test_update_job_none_toolsets_does_not_widen_empty_allowlist(hermes_env):
+    from cron.jobs import create_job, update_job
+
+    job = create_job(prompt="format this", schedule="every 1h", enabled_toolsets=[])
+    updated = update_job(job["id"], {"prompt": "format this better", "enabled_toolsets": None})
+    assert updated is not None
+    assert updated["enabled_toolsets"] == []
+    assert updated["prompt"] == "format this better"
+
+
+def test_dashboard_prompt_edit_keeps_zero_tool_allowlist(hermes_env, tmp_path):
+    """The reported path: a prompt-only dashboard save used to turn [] into null."""
+    from cron.jobs import create_job, update_job
+    from hermes_cli.web_routers.cron import _normalize_dashboard_cron_updates
+
+    job = create_job(prompt="format this", schedule="every 1h", enabled_toolsets=[])
+    updates = _normalize_dashboard_cron_updates(
+        {"prompt": "format this better", "enabled_toolsets": []}, tmp_path)
+    updated = update_job(job["id"], updates)
+    assert updated is not None
+    assert updated["enabled_toolsets"] == []
+    assert updated["prompt"] == "format this better"

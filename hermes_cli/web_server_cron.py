@@ -37,6 +37,20 @@ def _cron_string_list(value: Any) -> Optional[list[str]]:
     return items or None
 
 
+def _cron_enabled_toolsets(value: Any) -> Optional[list[str]]:
+    """Dashboard allowlist. An explicit empty list is 'no tools', not 'no restriction'.
+
+    ``_cron_string_list`` collapses ``[]`` to ``None``, which is correct for
+    ``context_from`` but would widen a zero-tool cron job on every dashboard
+    save (#148886).
+    """
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return _cron_string_list(value)
+
+
 def _normalize_dashboard_cron_script(value: Any, profile_home: Path) -> Optional[str]:
     """Validate a dashboard-selected cron script against the profile sandbox."""
     text = _cron_optional_text(value)
@@ -276,7 +290,7 @@ def _create_cron_job_sync(body: CronJobCreate, profile: Optional[str] = None):
             base_url=_cron_optional_text(body.base_url, strip_trailing_slash=True),
             script=script,
             context_from=context_from,
-            enabled_toolsets=_cron_string_list(body.enabled_toolsets),
+            enabled_toolsets=_cron_enabled_toolsets(body.enabled_toolsets),
             workdir=_cron_optional_text(body.workdir),
             no_agent=no_agent,
             timezone=_cron_optional_text(body.timezone),

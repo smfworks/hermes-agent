@@ -2127,6 +2127,10 @@ def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]
         _rederive_repeat_for_schedule_change(job, updates)
         _normalize_job_updates(job, updates)
         _apply_pin_update(job, updates)
+        # None means "field omitted" (MCP already skips it). Writing it would
+        # widen a stored [] zero-tool allowlist into unrestricted (#148886).
+        if updates.get("enabled_toolsets") is None:
+            updates.pop("enabled_toolsets", None)
         updated = _apply_skill_fields({**job, **updates})
         _reject_terminal_activation(job, updated, job_id)
         # Re-check on the MERGED record; scoped to changed fields so legacy records keep loading.
