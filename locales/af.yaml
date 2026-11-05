@@ -661,6 +661,7 @@ gateway:
   clarify:
     hint_single: "Antwoord met die nommer, die opsieteks, of jou eie antwoord."
     hint_multi: "Veelvuldige keuses toegelaat — antwoord met die nommers geskei deur kommas of spasies (bv. \"1, 3\"), die opsieteks, of jou eie antwoord."
+    recommended: "(Aanbeveel)"
     option_line: "  {index}. {choice}"
     question: "❓ {question}"
     answered: "✅ geantwoord: {response}"

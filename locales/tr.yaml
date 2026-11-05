@@ -661,6 +661,7 @@ gateway:
   clarify:
     hint_single: "Numarayı, seçenek metnini veya kendi yanıtınızı yazın."
     hint_multi: "Birden fazla seçim yapılabilir — numaraları virgül veya boşlukla ayırarak (örn. \"1, 3\"), seçenek metnini veya kendi yanıtınızı yazın."
+    recommended: "(Önerilen)"
     option_line: "  {index}. {choice}"
     question: "❓ {question}"
     answered: "✅ yanıtlandı: {response}"

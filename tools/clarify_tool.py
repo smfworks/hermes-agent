@@ -10,26 +10,51 @@ MAX_QUESTIONS = 5  # independent questions per call
 # Per-choice cap. Surfaces wrap long choice text (newlines kept), so anything longer is rejected here, at the
 # source, instead of a surface silently dropping a choice that ``choices_offered`` still reports as shown.
 MAX_CHOICE_CHARS = 8000
-# Applied to the first choice here (not per-surface) so every adapter renders it identically.
+# English fallback. mark_recommended() uses gateway.clarify.recommended so a
+# French (or other) display.language does not leak this string into the prompt.
 RECOMMENDED_LABEL = "(Recommended)"
 _UNAVAILABLE = "Clarify tool is not available in this execution context."
 _SHAPE = "Pass questions=[{question, choices?, multi_select?}]; a single question is a one-entry array."
 
 
+def _active_recommended_label() -> str:
+    from agent.i18n import t
+    label = t("gateway.clarify.recommended")
+    if not label or label == "gateway.clarify.recommended":
+        return RECOMMENDED_LABEL
+    return label
+
+
+def _recommended_labels_to_strip() -> list[str]:
+    """Active language first, English always — a copied answer from before a
+    language change still comes back clean."""
+    labels = [_active_recommended_label()]
+    if RECOMMENDED_LABEL not in labels:
+        labels.append(RECOMMENDED_LABEL)
+    return sorted(labels, key=len, reverse=True)
+
+
 def mark_recommended(choices: list[str]) -> list[str]:
-    """Suffix the first choice (schema says best-first) with RECOMMENDED_LABEL; idempotent,
-    and a lone choice is left untouched (nothing to prefer it over)."""
+    """Suffix the first choice (schema says best-first) with the localized
+    recommended label; idempotent, and a lone choice is left untouched
+    (nothing to prefer it over)."""
     first = str(choices[0]).strip() if choices else ""
     if len(choices) < 2 or first != strip_recommended(first):
         return choices
-    return [f"{first} {RECOMMENDED_LABEL}"] + list(choices[1:])
+    return [f"{first} {_active_recommended_label()}"] + list(choices[1:])
 
 
 def strip_recommended(text: str) -> str:
     """Remove the recommendation label so presentation never leaks into ``user_response``."""
     stripped = str(text).strip()
-    if stripped.casefold().endswith(RECOMMENDED_LABEL.casefold()):
-        return stripped[: -len(RECOMMENDED_LABEL)].strip()
+    changed = True
+    while changed:
+        changed = False
+        for label in _recommended_labels_to_strip():
+            if label and stripped.casefold().endswith(label.casefold()):
+                stripped = stripped[: -len(label)].strip()
+                changed = True
+                break
     return stripped
 
 

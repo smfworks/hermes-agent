@@ -661,6 +661,7 @@ gateway:
   clarify:
     hint_single: "回复编号、选项文字，或你自己的答案。"
     hint_multi: "可多选——回复以逗号或空格分隔的编号（例如 \"1, 3\"）、选项文字，或你自己的答案。"
+    recommended: "(推荐)"
     option_line: "  {index}. {choice}"
     question: "❓ {question}"
     answered: "✅ 已回答：{response}"

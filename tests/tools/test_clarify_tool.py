@@ -7,6 +7,7 @@ from tools.clarify_tool import (
     MAX_CHOICES,
     MAX_QUESTIONS,
     CLARIFY_SCHEMA,
+    strip_recommended,
 )
 
 
@@ -196,6 +197,34 @@ class TestClarifyRecommendedLabel:
         response = result["responses"][0]
         assert response["choices_offered"] is None
         assert response["user_response"] == "whatever"
+
+    def test_label_follows_active_language(self, monkeypatch):
+        """Messaging adapters render the tool string, so the label must be localized."""
+        from agent import i18n
+        monkeypatch.setenv("HERMES_LANGUAGE", "fr")
+        i18n.reset_language_cache()
+        try:
+            seen = []
+
+            def cb(questions):
+                seen.extend(questions[0]["choices"] or [])
+                return _reply({"q0": seen[1]})
+
+            _ask(cb, [{"question": "Pick", "choices": ["Rebase", "Merge"]}])
+            assert seen == ["Rebase (recommandé)", "Merge"]
+        finally:
+            i18n.reset_language_cache()
+
+    def test_strip_english_label_after_language_change(self, monkeypatch):
+        """An answer copied before a language change still comes back clean."""
+        from agent import i18n
+        monkeypatch.setenv("HERMES_LANGUAGE", "fr")
+        i18n.reset_language_cache()
+        try:
+            assert strip_recommended("Rebase (Recommended)") == "Rebase"
+            assert strip_recommended("Rebase (recommandé)") == "Rebase"
+        finally:
+            i18n.reset_language_cache()
 
 
 class TestRegistryMultiSelectPassThrough:
