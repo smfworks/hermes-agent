@@ -4494,6 +4494,10 @@ class BasePlatformAdapter(ABC):
                 response = None
             if not response:
                 logger.debug("[%s] Handler returned empty/None response for %s", self.name, event.source.chat_id)
+                # No final send, so #117300's pre-send pause never fires. Pause here so a
+                # stalled on_processing_complete cannot leave sendChatAction running after
+                # an allow_silence turn (#149948). _stop_typing_refresh discards the pause.
+                self.pause_typing_for_chat(event.source.chat_id)
             else:
                 extracted = await self._extract_response_content(
                     response, event, session_key, is_ephemeral_response=is_ephemeral_response)

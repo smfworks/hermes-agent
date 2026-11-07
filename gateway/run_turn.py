@@ -186,15 +186,25 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
 
     async def _hmwa_stop_typing_for_turn(self, event, source):
         """Stop the typing indicator (never raises), with the delivery path's thread/workspace routing
-        metadata (Slack AI status is thread-scoped), on this turn's own message, not the chat's latest."""
+        metadata (Slack AI status is thread-scoped), on this turn's own message, not the chat's latest.
+
+        Pause the chat first. Telegram has no stop-typing API, so ``stop_typing`` is a no-op and
+        ``_keep_typing`` would keep sending ``sendChatAction`` through persist and a hung handler
+        (#149948). ``_stop_typing_refresh`` discards the pause in the adapter's ``finally``.
+        """
         from gateway.platforms.helpers import typing_metadata_for_turn
         with suppress(Exception):
             _typing_adapter = self._delivery_adapter_for(source)
+            if not _typing_adapter:
+                return
+            pause = getattr(_typing_adapter, "pause_typing_for_chat", None)
+            if callable(pause):
+                pause(source.chat_id)
             _kind = type(_typing_adapter)
-            if _typing_adapter and callable(getattr(_kind, "_stop_typing_with_metadata", None)):
+            if callable(getattr(_kind, "_stop_typing_with_metadata", None)):
                 await _typing_adapter._stop_typing_with_metadata(source.chat_id, typing_metadata_for_turn(_typing_adapter,
                     source.chat_id, self._reply_anchor_for_event(event), self._event_thread_metadata(event, source)))
-            elif _typing_adapter and callable(getattr(_kind, "stop_typing", None)):
+            elif callable(getattr(_kind, "stop_typing", None)):
                 await _typing_adapter.stop_typing(source.chat_id)
 
     async def _handle_message_with_agent(self, event, source, _quick_key: str, run_generation: int):

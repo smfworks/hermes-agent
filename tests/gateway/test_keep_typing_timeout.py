@@ -286,3 +286,69 @@ async def test_process_message_pauses_typing_before_a_stalled_final_send():
         turn.cancel()
         with pytest.raises(asyncio.CancelledError):
             await turn
+
+
+@pytest.mark.asyncio
+async def test_process_message_pauses_typing_when_handler_returns_empty():
+    """allow_silence / empty reply has no final send (#149948). Pause before
+    later awaits so a stalled cleanup cannot keep sendChatAction alive."""
+    from gateway.platforms.event import MessageEvent, MessageType
+    from gateway.session import SessionSource
+
+    adapter = _StubAdapter()
+    paused = asyncio.Event()
+    orig_pause = adapter.pause_typing_for_chat
+
+    def _pause(chat_id):
+        orig_pause(chat_id)
+        paused.set()
+
+    async def _handler(evt):
+        return None
+
+    adapter.set_message_handler(_handler)
+    adapter.pause_typing_for_chat = _pause
+    adapter._start_typing_refresh = MagicMock(return_value=None)
+    event = MessageEvent(
+        text="hi", message_id="msg-silent", message_type=MessageType.TEXT,
+        source=SessionSource(platform=Platform.TELEGRAM, chat_id="88", user_id="u-1"),
+    )
+    turn = asyncio.create_task(
+        adapter._process_message_background(event, "agent:main:telegram:group:88"),
+    )
+    try:
+        await asyncio.wait_for(paused.wait(), timeout=5)
+        assert paused.is_set(), "typing not paused on empty/silence reply"
+    finally:
+        if not turn.done():
+            turn.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(turn, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_stop_typing_for_turn_pauses_when_stop_typing_is_noop():
+    """Telegram stop_typing is a no-op. The runner must pause the chat so
+    _keep_typing stops sendChatAction once the agent returns (#149948)."""
+    from gateway.platforms.event import MessageEvent, MessageType
+    from gateway.run_turn import GatewayTurnMixin
+    from gateway.session import SessionSource
+
+    adapter = _StubAdapter()
+    event = MessageEvent(
+        text="hi", message_id="msg-1", message_type=MessageType.TEXT,
+        source=SessionSource(platform=Platform.TELEGRAM, chat_id="99", user_id="u-1"),
+    )
+
+    class _Runner:
+        def _delivery_adapter_for(self, source):
+            return adapter
+
+        def _reply_anchor_for_event(self, evt):
+            return evt.message_id
+
+        def _event_thread_metadata(self, evt, source):
+            return {}
+
+    await GatewayTurnMixin._hmwa_stop_typing_for_turn(_Runner(), event, event.source)
+    assert "99" in adapter._typing_paused
