@@ -109,3 +109,25 @@ def test_a_call_that_raises_releases_its_environment_to_the_reaper(env, monkeypa
 
     _sweep_after_long_call()
     assert env.cleaned
+
+def test_a_file_write_preflight_keeps_its_environment_past_the_lifetime(env, monkeypatch, tmp_path):
+    """A stalled write_file preflight cannot lose the sandbox to an idle sweep (issue #152557)."""
+    from tools import file_tools
+
+    monkeypatch.setattr(tt, "_calls_in_flight", {})
+    reaped_during_preflight = []
+
+    def stalled_preflight(*_args):
+        _sweep_after_long_call()
+        reaped_during_preflight.append(env.cleaned)
+        return "test-only stale write refusal"
+
+    monkeypatch.setattr(file_tools, "_stale_overwrite_blocker", stalled_preflight)
+    file_tools.write_file_tool(str(tmp_path / "new-file.txt"), "hello", task_id="session-42")
+
+    assert reaped_during_preflight == [False]
+    assert tt._active_environments["default"] is env
+
+    # The reaper can reclaim it after the file tool returns, not during the call.
+    _sweep_after_long_call()
+    assert env.cleaned
