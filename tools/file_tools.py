@@ -407,6 +407,20 @@ _SPECIAL_FILE_KINDS = (
     (stat.S_ISBLK, "a block device"))
 
 
+def _in_flight(raw_task_id: str):
+    """Hold this task's environment against the idle reaper for one file-tool call.
+
+    GW-60 (#144597) holds terminal and execute_code calls; its Known-gaps note
+    assumed file tools are too short to matter. They are not: a file op that
+    wedges (a blocked resolution wait or a stalled creation lock) used to have
+    its sandbox reaped mid-call at ``terminal.lifetime_seconds``. The hold uses
+    the same env key terminal_tool uses, so the reaper's busy check matches.
+    """
+    from tools.terminal_tool import _resolve_container_task_id
+    from tools.terminal_tool_lifecycle import _call_in_flight
+    return _call_in_flight(_resolve_container_task_id(raw_task_id or "default"))
+
+
 def _special_file_kind(path) -> str | None:
     """Human name for a non-regular file type that would hang a read, else None.
 
@@ -608,6 +622,15 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
     → Hermes internal denylist → document extraction → binary-extension guard
     → negative-result cache → dedup stub → real read.
     """
+    try:
+        with _in_flight(task_id):
+            return _read_file_tool_held(path, offset, limit, task_id)
+    except Exception as e:
+        return tool_error(str(e))
+
+
+def _read_file_tool_held(path: str, offset: int, limit: int, task_id: str) -> str:
+    """Body of :func:`read_file_tool` while the task's env is held in-flight."""
     try:
         offset, limit = normalize_read_pagination(offset, limit)
 
@@ -875,6 +898,19 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     if err:
         return tool_error(err)
     try:
+        with _in_flight(task_id):
+            return _write_file_tool_held(path, content, task_id, session_id)
+    except Exception as e:
+        if _is_expected_write_exception(e):
+            logger.debug("write_file expected denial: %s: %s", type(e).__name__, e)
+        else:
+            logger.error("write_file error: %s: %s", type(e).__name__, e, exc_info=True)
+        return tool_error(str(e))
+
+
+def _write_file_tool_held(path: str, content: str, task_id: str, session_id: str | None = None) -> str:
+    """Body of :func:`write_file_tool` while the task's env is held in-flight."""
+    try:
         # Resolution failure falls back to the legacy unlocked path (the write
         # still proceeds; the per-task staleness check still runs).
         _resolved = _resolve_or_none(path, task_id)
@@ -972,6 +1008,28 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
     if precheck_err:
         return tool_error(precheck_err)
     try:
+        with _in_flight(task_id):
+            return _patch_tool_held(mode, path, old_string, new_string, replace_all,
+                                    patch, task_id, session_id)
+    except Exception as e:
+        return tool_error(str(e))
+
+
+def _patch_tool_held(mode: str, path: str | None, old_string: str | None,
+                     new_string: str | None, replace_all: bool, patch: str | None,
+                     task_id: str, session_id: str | None) -> str:
+    """Body of :func:`patch_tool` while the task's env is held in-flight."""
+    _paths_to_check = [path] if path else []
+    _content_write_paths = list(_paths_to_check)
+    _entry_paths: list[str] = []
+    if mode == "patch" and patch:
+        collected = _collect_v4a_header_paths(patch)
+        if isinstance(collected, str):
+            return collected
+        _paths_to_check += collected[0]
+        _content_write_paths += collected[1]
+        _entry_paths = collected[2]
+    try:
         # Lock paths in sorted, deduplicated order so concurrent callers with
         # overlapping multi-file patches can't deadlock (every caller locks in
         # the same order). An unresolvable path is simply not locked.
@@ -1049,6 +1107,18 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
                 order: str = "discovery",
                 task_id: str = "default") -> str:
     """Search for content or files."""
+    try:
+        with _in_flight(task_id):
+            return _search_tool_held(pattern, target, path, file_glob, limit, offset,
+                                     output_mode, context, order, task_id)
+    except Exception as e:
+        return tool_error(str(e))
+
+
+def _search_tool_held(pattern: str, target: str, path: str, file_glob: str | None,
+                      limit: int, offset: int, output_mode: str, context: int,
+                      order: str, task_id: str) -> str:
+    """Body of :func:`search_tool` while the task's env is held in-flight."""
     try:
         offset, limit = normalize_search_pagination(offset, limit)
 
