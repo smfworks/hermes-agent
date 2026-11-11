@@ -10,7 +10,7 @@ which prior message the user is referencing.
 import pytest
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
-from gateway.platforms.base import MessageEvent
+from gateway.platforms.event import MessageEvent
 from gateway.run import GatewayRunner
 from gateway.session import SessionSource
 
@@ -63,7 +63,7 @@ async def test_reply_prefix_injected_when_text_absent_from_history():
 @pytest.mark.asyncio
 async def test_telegram_long_reply_reaches_prompt_without_losing_later_items():
     """The native reply already has the full message; preparation must not trim it."""
-    from gateway.platforms.base import MessageType
+    from gateway.platforms.event import MessageType
     from tests.gateway.test_telegram_reply_quote import _make_adapter, _make_message
 
     quoted = "\n".join(
@@ -96,7 +96,7 @@ async def test_quoted_reply_references_stay_literal_while_typed_ones_expand(tmp_
     payload.write_text("LOCAL-FILE-MARKER", encoding="utf-8")
     monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
     runner = _make_runner()
-    runner._session_model_overrides, runner._last_resolved_model = {}, {}
+    runner._session_model_overrides = {}
     runner._agent_cache, runner._agent_cache_lock = {}, threading.Lock()
     runner._resolve_session_agent_runtime = lambda **kw: ("openai/gpt-4.1-mini", {"base_url": None, "api_key": ""})
     source = _source()
