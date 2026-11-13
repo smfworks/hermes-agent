@@ -258,6 +258,42 @@ def _endpoint_disk_cache_put(normalized: str, cache: dict[str, dict[str, Any]]) 
         ts_key="at", value_key="models", what="endpoint model metadata disk cache", ts_first=True)
 
 
+def _endpoint_disk_cache_age(normalized: str) -> Optional[float]:
+    """Age in seconds of the ``normalized`` entry in the endpoint memo file, else None."""
+    entry = _load_json_dict(_get_endpoint_metadata_cache_path()).get(normalized)
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return max(0.0, time.time() - float(entry["at"]))
+    except Exception:
+        return None
+
+
+def _stale_endpoint_disk_context_length(model: str, base_url: str) -> Optional[int]:
+    """Stale-tolerant read of the endpoint memo (ignores the TTL).
+
+    A transient probe failure while the fresh memo has just expired used to drop
+    resolution to the hard default (256K) even though the correct window was still
+    on disk — one blip mis-sized compression for the whole session (#155009). This
+    answers from the expired memo instead; the caller warns and does NOT persist.
+    Match rules mirror ``_resolve_endpoint_context_length`` (exact, sole entry,
+    boundary-free substring) so both readers agree on what "the endpoint said"."""
+    normalized = _normalize_base_url(base_url)
+    if not normalized:
+        return None
+    entry = _load_json_dict(_get_endpoint_metadata_cache_path()).get(normalized)
+    models = entry.get("models") if isinstance(entry, dict) else None
+    if not isinstance(models, dict) or not models:
+        return None
+    matched = models.get(model)
+    if not matched and len(models) == 1:
+        matched = next(iter(models.values()))
+    elif not matched and model:  # substring match; "" would match EVERY key and poison the window
+        matched = next((e for key, e in models.items() if model in key or key in model), None)
+    context_length = matched.get("context_length") if matched else None
+    return context_length if isinstance(context_length, int) and context_length > 0 else None
+
+
 # Descending probe tiers for unknown models; tier[0] is also the default fallback.
 CONTEXT_PROBE_TIERS = [256_000, 128_000, 64_000, 32_000, 16_000, 8_000]
 DEFAULT_FALLBACK_CONTEXT = CONTEXT_PROBE_TIERS[0]
@@ -2071,7 +2107,27 @@ def _resolve_custom_endpoint_context_length(model: str, base_url: str, api_key: 
     if hit:
         logger.info("Using hardcoded context length %s for model %r (custom endpoint, catalog match on %r)", f"{hit[1]:,}", model, hit[0])
         return hit[1]
-    # Same silent-256K bug class as the step-9 fallback — warn here too.
+    # 3c. Stale memo before the hard default: an expired memo is still the endpoint's own
+    # answer, and a better last-known window than 256K (#155009). Not persisted.
+    return _fallback_to_stale_endpoint_memo(model, base_url)
+
+
+def _fallback_to_stale_endpoint_memo(model: str, base_url: str) -> int:
+    """Serve the expired endpoint memo value when it exists, else the hard default.
+
+    Shared by the custom-endpoint path (step 3c) and the final fallback (step 9b) in
+    get_model_context_length. Warns once per (model, base_url); never persists — the
+    next successful probe rewrites the memo and revalidation is not blocked."""
+    stale_ctx = _stale_endpoint_disk_context_length(model, base_url)
+    if stale_ctx is not None:
+        age = _endpoint_disk_cache_age(_normalize_base_url(base_url))
+        logger.warning(
+            "Probe for %r (base_url=%s) failed — serving stale endpoint memo value %s tokens (memo %s old, not re-probed). "
+            "Set model.context_length in config.yaml to override.",
+            model, base_url or "default", f"{stale_ctx:,}",
+            f"{int(age)}s" if age is not None else "unknown age",
+        )
+        return stale_ctx
     _warn_context_length_fallback(model, base_url)
     return DEFAULT_FALLBACK_CONTEXT
 
@@ -2317,6 +2373,18 @@ def get_model_context_length(
     if hit:
         return hit[1]
     # 9. Default fallback — warn (deduped) so small-context models don't silently get 256K.
+    # 9b. But first: an expired endpoint memo is still the endpoint's own answer (#155009) —
+    # a transient probe failure must degrade to the last known window, not the generic one.
+    stale_ctx = _stale_endpoint_disk_context_length(model, base_url)
+    if stale_ctx is not None:
+        age = _endpoint_disk_cache_age(_normalize_base_url(base_url))
+        logger.warning(
+            "Probe for %r (base_url=%s) failed — serving stale endpoint memo value %s tokens (memo %s old, not re-probed). "
+            "Set model.context_length in config.yaml to override.",
+            model, base_url or "default", f"{stale_ctx:,}",
+            f"{int(age)}s" if age is not None else "unknown age",
+        )
+        return stale_ctx
     _warn_context_length_fallback(model, base_url)
     return DEFAULT_FALLBACK_CONTEXT
 
