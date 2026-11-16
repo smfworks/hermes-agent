@@ -1044,6 +1044,14 @@ def get_scratch_dir(home: str | Path | None = None, *, prune: bool = True) -> Pa
     """
     base = Path(home) if home is not None else get_hermes_home()
     scratch = base / "cache" / "scratch"
+    # A ghost named profile (deleted, tombstoned, or never live) must not be re-materialized by a
+    # side-effecting path: building a worker env for a routed home that no longer exists used to
+    # scaffold ``profiles/<name>/cache/scratch`` and nothing else (#156438), leaving a dir that
+    # looks like a profile that "almost" exists. Same contract as ``mkdir_under_hermes_home``
+    # (#94590): the SessionDB/log writers refuse; the scratch path now refuses too.
+    profile_home = named_profile_home(scratch)
+    if profile_home is not None and not named_profile_is_live(profile_home):
+        return scratch
     try:
         scratch.mkdir(parents=True, exist_ok=True)
         if sys.platform != "win32":

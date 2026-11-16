@@ -790,3 +790,39 @@ def test_prune_owner_lookup_survives_symlinked_scratch_and_drops_orphaned_mcp_he
             helper.kill()
             helper.wait(timeout=10)
 
+
+
+def test_ghost_named_profile_home_is_not_rematerialized(tmp_path):
+    """A side-effecting scratch build must not scaffold a named profile that is not live
+    (#156438): building a worker env for a routed home that no longer exists used to create
+    ``profiles/<name>/cache/scratch`` and nothing else, leaving a ghost that looks like a
+    profile that "almost" exists. Same refuse contract as ``mkdir_under_hermes_home``."""
+    from hermes_constants import _DELETED_PROFILES_DIR
+
+    # A real Hermes home with a never-live profile dir: no identity markers, no tombstone.
+    root = tmp_path / ".hermes"
+    ghost = root / "profiles" / "ghost"
+    ghost.mkdir(parents=True)
+    (root / "config.yaml").write_text("x: 1\n", encoding="utf-8")
+
+    scratch = get_scratch_dir(ghost)
+    assert scratch == ghost / "cache" / "scratch"  # path still resolves, nothing created
+    assert not scratch.exists() and list(ghost.iterdir()) == []
+
+    # A tombstoned profile is refused the same way, without deleting anything.
+    gone = root / "profiles" / "gone"
+    gone.mkdir()
+    (gone / "state.db").write_text("x", encoding="utf-8")
+    (root / "profiles" / _DELETED_PROFILES_DIR).mkdir()
+    (root / "profiles" / _DELETED_PROFILES_DIR / "gone").write_text("deleted\n", encoding="utf-8")
+    stale = gone / "cache" / "scratch"
+    stale.mkdir(parents=True)
+    assert get_scratch_dir(gone) == stale
+    assert stale.exists()  # pre-existing content is left alone, only creation is refused
+
+    # A live profile (identity marker present) still gets its scratch dir.
+    live = root / "profiles" / "live"
+    live.mkdir()
+    (live / "config.yaml").write_text("x: 1\n", encoding="utf-8")
+    assert get_scratch_dir(live) == live / "cache" / "scratch"
+    assert (live / "cache" / "scratch").is_dir()
