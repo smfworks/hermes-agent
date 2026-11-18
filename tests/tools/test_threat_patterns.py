@@ -131,6 +131,17 @@ class TestFalsePositives:
         assert findings == []
 
 
+    def test_common_word_havoc_does_not_trip_at_context_scope(self):
+        # "havoc" is a common English word ("wreaks havoc") and a
+        # legitimate agent name.  It was removed from the
+        # known_c2_framework alternation for the same reason as "praxis".
+        # Havoc C2 is still caught by the context-rich patterns
+        # (c2_explicit etc.) when real C2 context is present.
+        text = "The storm wreaked havoc on the deploy pipeline."
+        findings = scan_for_threats(text, scope="context")
+        assert findings == []
+
+
     def test_do_not_respond_alone_does_not_trip(self):
         # Common "think before answering" prompt pattern.  We don't have
         # a response-hijack pattern (was in the issue body, intentionally
