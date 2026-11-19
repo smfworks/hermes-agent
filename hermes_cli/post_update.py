@@ -45,9 +45,13 @@ def _backup_existing(paths: Iterable[Path]) -> dict:
             continue
         dest = _backup_path(path, stamp)
         shutil.copy2(path, dest)
-        from hermes_cli.config import _secure_file  # copy2 keeps the source's (possibly 0644) mode
+        # copy2 keeps the source's (possibly 0644) mode. _secure_file skips containers, which
+        # is right for live files but not for a copy we just created — a 0644 .env would
+        # leave a world-readable .env.bak-* holding its keys (#157997, same class as #157943).
+        # _secure_backup_file: 0600 outside containers, world bits stripped inside.
+        from hermes_cli.config_backups import _secure_backup_file
 
-        _secure_file(dest)
+        _secure_backup_file(dest)
         backups[path] = dest
     return backups
 

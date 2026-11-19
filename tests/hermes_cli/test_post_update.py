@@ -383,3 +383,41 @@ def test_migration_backups_are_owner_only_even_from_a_world_readable_source(tmp_
     assert len(backups) == 2
     for dest in backups.values():
         assert dest.stat().st_mode & 0o777 == 0o600, dest
+
+
+@pytest.mark.platforms("posix")
+def test_migration_backups_drop_world_bits_in_container(tmp_path, monkeypatch):
+    """The container skip is for live files, not copies we just created (#157997).
+
+    `_backup_existing` used _secure_file, which early-returns in containers — a 0644 .env
+    (API keys) yielded a world-readable .env.bak-*. 0644 -> 0640: world gone, group kept
+    for split UIDs, matching _secure_backup_file's policy from #157943.
+    """
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: False)
+    monkeypatch.setattr("hermes_constants.get_managed_system", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_cli.config._container_or_chmod_skipped", lambda: True)
+    monkeypatch.setattr("hermes_constants._container_or_chmod_skipped", lambda: True)
+    sources = []
+    for name in ("config.yaml", ".env"):
+        path = tmp_path / name
+        path.write_text("k: v\n")
+        path.chmod(0o644)
+        sources.append(path)
+    backups = post_update._backup_existing(sources)
+    assert len(backups) == 2
+    for dest in backups.values():
+        assert dest.stat().st_mode & 0o777 == 0o640, dest
+
+
+@pytest.mark.platforms("posix")
+def test_migration_backups_stay_0600_outside_container(tmp_path, monkeypatch):
+    """Outside containers nothing changed: backups are owner-only (#157997)."""
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: False)
+    monkeypatch.setattr("hermes_constants.get_managed_system", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_cli.config._container_or_chmod_skipped", lambda: False)
+    monkeypatch.setattr("hermes_constants._container_or_chmod_skipped", lambda: False)
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-test\n")
+    env.chmod(0o644)
+    (dest,) = post_update._backup_existing([env]).values()
+    assert dest.stat().st_mode & 0o777 == 0o600
