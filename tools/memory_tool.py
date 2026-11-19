@@ -119,7 +119,10 @@ _STORE_ACTIONS = {
 
 
 def _batch_op_line(op: dict[str, Any]) -> str:
-    op = op or {}
+    # isinstance guard, not `op or {}`: a truthy non-mapping element (a model emitting the
+    # entry text where the operation object belonged, #157909) must produce a summary line,
+    # never an AttributeError raised from inside a formatting helper.
+    op = op if isinstance(op, dict) else {}
     act, content, old = op.get("action", "?"), op.get("content") or op.get("new_text") or "", op.get("old_text", "")
     if act == "remove":
         return f"- remove: {old}"
@@ -258,6 +261,15 @@ def _memory_tool(action, target, content, old_text, new_text, operations, store)
     if operations:
         if not isinstance(operations, list):
             return _invalid("operations must be a list of {action, content?, old_text?} objects.")
+        # Element shape, not just container (#157909): a bare string (or any non-mapping)
+        # used to raise AttributeError from _batch_op_line inside the gates before this
+        # point, surfacing as a provider/API error. Name the index so the model can retry.
+        first_bad = next((i for i, op in enumerate(operations, 1) if not isinstance(op, dict)), None)
+        if first_bad is not None:
+            return _invalid(
+                "operations must be a list of {action, content?, old_text?} objects. "
+                f"Operation {first_bad} is {type(operations[first_bad - 1]).__name__}, not an object. "
+                "Nothing was written or staged.")
         if any(isinstance(op, dict) and op.get("action") == "replace" for op in operations):
             return _invalid(_REPLACE_REMOVED)
         denied = _background_delete_gate(store, action, operations, target)

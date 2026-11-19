@@ -501,6 +501,41 @@ class TestMemoryToolDispatcher:
             assert result["success"] is False and "use 'patch'" in result["error"], result
         assert store.memory_entries == ["Jeff drinks tea; prefers Rust; lives in Portland"]
 
+    def test_batch_with_string_element_is_rejected_not_crashed(self, store):
+        # A model emitting the entry text where the operation object belongs used to raise
+        # AttributeError ('str' has no .get) from _batch_op_line inside the write gates —
+        # before the operations validation ran — surfacing as a provider/API error
+        # (#157909). It must be an actionable validation error instead, naming the index.
+        for bad in (["some text"], [{"action": "add", "content": "fine"}, "some text"]):
+            result = json.loads(memory_tool(target="memory", store=store, operations=bad))
+            assert result["success"] is False, result
+            assert "operations must be a list of {action, content?, old_text?} objects." in result["error"]
+            assert f"Operation {len(bad)} is str" in result["error"]
+            assert "Nothing was written or staged." in result["error"]
+        assert store.memory_entries == []
+
+    def test_batch_element_validation_names_first_bad_index(self, store):
+        # With several bad elements, the error names the first one; later bad ones and
+        # their position stay stable across retries.
+        result = json.loads(memory_tool(
+            target="memory",
+            store=store,
+            operations=[{"action": "add", "content": "fine"}, 42, "also bad"],
+        ))
+        assert result["success"] is False
+        assert "Operation 2 is int" in result["error"]
+
+    def test_batch_none_element_is_rejected(self, store):
+        # `op or {}` used to quietly pass None through to the gate summary as "- ?:";
+        # validation must reject it with the same actionable message (#157909).
+        result = json.loads(memory_tool(
+            target="memory", store=store,
+            operations=[None, {"action": "add", "content": "fine"}],
+        ))
+        assert result["success"] is False
+        assert "Operation 1 is NoneType" in result["error"]
+        assert store.memory_entries == []
+
     def test_new_text_alias_for_content_on_patch(self, store):
         # A caller mirroring old_text with new_text (the patch tool's shape)
         # must succeed instead of erroring 'content is required'.
