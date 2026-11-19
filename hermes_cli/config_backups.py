@@ -11,6 +11,7 @@ for the same reason is skipped, and only the newest ``keep`` per reason survive,
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -51,8 +52,6 @@ def _secure_backup_file(path: Path) -> None:
     group access; nothing else in the container path is widened. Managed installs keep
     their deliberate mode, as in ``_secure_file`` (#157943).
     """
-    import os
-
     from hermes_cli.config import is_managed
 
     if is_managed():

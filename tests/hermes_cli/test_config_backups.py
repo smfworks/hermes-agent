@@ -142,6 +142,26 @@ def test_backup_pass_never_chmods_through_a_planted_link(tmp_path: Path, monkeyp
 
 
 @pytest.mark.platforms("posix")
+def test_managed_backup_keeps_its_deliberate_mode(tmp_path: Path, monkeypatch):
+    # Managed installs set their own mode at activation; the backup must not churn it
+    # (the managed early-return in _secure_backup_file, flagged in review of #157943).
+    # Note: the rotation sweep's drop_other_access ALSO early-returns when managed, so
+    # the only chmod that could touch the new copy is _secure_backup_file itself.
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: True)
+    monkeypatch.setattr("hermes_constants.get_managed_system", lambda *a, **k: "nix")
+    monkeypatch.setattr("hermes_cli.config._container_or_chmod_skipped", lambda: False)
+    monkeypatch.setattr("hermes_constants._container_or_chmod_skipped", lambda: False)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("api_key: secret\n")
+    os.chmod(cfg, 0o640)
+
+    dest = backup_config(cfg, "pre-setup")
+
+    assert dest is not None
+    assert dest.stat().st_mode & 0o777 == 0o640  # copy2 carried the source mode; no chmod
+
+
+@pytest.mark.platforms("posix")
 def test_container_backup_of_world_readable_config_drops_world_bits(tmp_path: Path, monkeypatch):
     # The container skip must not skip the backup itself: 0644 in, 0640 out (group stays for
     # split UIDs, world goes — never a world-readable credentials copy, #157943).
