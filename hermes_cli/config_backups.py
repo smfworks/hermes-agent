@@ -41,6 +41,36 @@ def list_config_backups(config_path: Path, reason: Optional[str] = None) -> list
                   key=lambda p: p.name, reverse=True)
 
 
+def _secure_backup_file(path: Path) -> None:
+    """Secure a config backup copy: 0600 outside containers, world bits stripped inside.
+
+    Unlike ``config._secure_file`` (which declines to chmod anything in a container so
+    volume-mounted live files keep the permissions their mounts need), a backup is a file
+    the exporter just created — chmodming it cannot break a mount. Inside a container only
+    the world bits are dropped (0644 -> 0640) so the split gateway/dashboard UIDs keep
+    group access; nothing else in the container path is widened. Managed installs keep
+    their deliberate mode, as in ``_secure_file`` (#157943).
+    """
+    import os
+
+    from hermes_cli.config import is_managed
+
+    if is_managed():
+        return
+    try:
+        mode = path.stat().st_mode & 0o777
+    except OSError:
+        return
+    from hermes_constants import _container_or_chmod_skipped
+
+    target = (mode & ~0o007) if _container_or_chmod_skipped() else 0o600
+    if target != mode:
+        try:
+            os.chmod(path, target)
+        except (OSError, NotImplementedError):
+            pass
+
+
 def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -> Optional[Path]:
     """Copy *config_path* to the backups dir; return the new path, or None when skipped/failed.
 
@@ -74,9 +104,12 @@ def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -
             return None
         shutil.copy2(config_path, dest)  # config-reader: ok — file tooling, gated above
         # copy2 carries the source mode over, so a config.yaml left 0644 by an editor would yield a
-        # world-readable copy of the user's credentials. Apply the same owner-only policy as config.yaml.
-        from hermes_cli.config import _secure_file
-        _secure_file(dest)
+        # world-readable copy of the user's credentials. Secure the copy without the live-config
+        # skips: a backup is a new file nobody else is meant to open, so outside containers it is
+        # 0600, and inside a container (where _secure_file declines to touch live mounts) only the
+        # world bits are dropped — 0644 -> 0640 — keeping group access for split gateway/dashboard
+        # UIDs while never leaving a world-readable credentials copy (#157943).
+        _secure_backup_file(dest)
         for stale in [dest, *existing][keep:]:
             stale.unlink(missing_ok=True)
         return dest
@@ -109,13 +142,12 @@ def load_newest_good_backup(config_path: Path) -> Optional[dict]:
 
 
 def _sweep_legacy_siblings(config_path: Path, root: Path) -> None:
-    from hermes_cli.config import _secure_file
     for pattern in _LEGACY_SIBLING_GLOBS:
         for old in config_path.parent.glob(pattern):
             if not old.is_file() or old.is_symlink():
                 continue
             try:
                 old.replace(root / old.name)
-                _secure_file(root / old.name)  # pre-backups-dir copies were often written 0644
+                _secure_backup_file(root / old.name)  # pre-backups-dir copies were often written 0644
             except OSError as exc:
                 logger.debug("Could not move legacy backup %s: %s", old, exc)

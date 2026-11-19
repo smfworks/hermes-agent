@@ -132,3 +132,85 @@ def test_backup_pass_never_chmods_through_a_planted_link(tmp_path: Path, monkeyp
     backup_config(cfg, "good")
 
     assert outside.stat().st_mode & 0o777 == 0o644
+
+
+# --- #157943: the container skip in _secure_file left container backups holding the source
+# mode, so a 0644 config.yaml (or .env snapshot) yielded a world-readable copy of credentials.
+# A backup is a new file nobody else is meant to open: outside containers it is 0600 as before;
+# inside a container only the world bits are stripped (0644 -> 0640), keeping group access for
+# split gateway/dashboard UIDs — the same policy the rotation sweep already applies to old copies.
+
+
+@pytest.mark.platforms("posix")
+def test_container_backup_of_world_readable_config_drops_world_bits(tmp_path: Path, monkeypatch):
+    # The container skip must not skip the backup itself: 0644 in, 0640 out (group stays for
+    # split UIDs, world goes — never a world-readable credentials copy, #157943).
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: False)
+    monkeypatch.setattr("hermes_constants.get_managed_system", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_constants._container_or_chmod_skipped", lambda: True)
+    monkeypatch.setattr("hermes_cli.config._container_or_chmod_skipped", lambda: True)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("api_key: secret\n")
+    os.chmod(cfg, 0o644)
+
+    dest = backup_config(cfg, "pre-setup")
+
+    assert dest is not None
+    assert dest.stat().st_mode & 0o777 == 0o640
+
+
+@pytest.mark.platforms("posix")
+def test_container_backup_of_group_readable_config_is_unchanged(tmp_path: Path, monkeypatch):
+    # 0640 already has no world bits; the container path must not widen or churn it.
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: False)
+    monkeypatch.setattr("hermes_constants.get_managed_system", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_constants._container_or_chmod_skipped", lambda: True)
+    monkeypatch.setattr("hermes_cli.config._container_or_chmod_skipped", lambda: True)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("api_key: secret\n")
+    os.chmod(cfg, 0o640)
+
+    dest = backup_config(cfg, "pre-setup")
+
+    assert dest is not None
+    assert dest.stat().st_mode & 0o777 == 0o640
+
+
+@pytest.mark.platforms("posix")
+def test_container_swept_legacy_backup_loses_world_bits(tmp_path: Path, monkeypatch):
+    # The legacy-sibling sweep used _secure_file too, so container sweeps kept 0644 copies (#157943).
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: False)
+    monkeypatch.setattr("hermes_constants.get_managed_system", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_constants._container_or_chmod_skipped", lambda: True)
+    monkeypatch.setattr("hermes_cli.config._container_or_chmod_skipped", lambda: True)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("api_key: secret\n")
+    legacy = tmp_path / "config.yaml.bak.20260101-000000"
+    legacy.write_text("api_key: old\n")
+    os.chmod(legacy, 0o644)
+
+    backup_config(cfg, "pre-setup")
+
+    moved = tmp_path / "backups" / "config" / legacy.name
+    assert moved.stat().st_mode & 0o777 == 0o640
+
+
+@pytest.mark.platforms("posix")
+def test_container_backup_of_0666_source_loses_world_bits(tmp_path: Path, monkeypatch):
+    # Worst case: a 0666 .env snapshot. The container path strips exactly the world bits
+    # (the issue's own sketch: mode & ~0o007), so 0666 -> 0660: world gone; group bits pass
+    # through unchanged, matching drop_other_access and the rotation sweep's policy.
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: False)
+    monkeypatch.setattr("hermes_constants.get_managed_system", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_constants._container_or_chmod_skipped", lambda: True)
+    monkeypatch.setattr("hermes_cli.config._container_or_chmod_skipped", lambda: True)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("api_key: secret\n")
+    os.chmod(cfg, 0o666)
+
+    dest = backup_config(cfg, "pre-setup")
+
+    assert dest is not None
+    mode = dest.stat().st_mode & 0o777
+    assert mode & 0o007 == 0  # no world access, ever
+    assert mode & 0o770 == 0o660  # owner+group bits pass through, nothing widened
