@@ -98,9 +98,31 @@ def _release_root(root: Path, owner_fd: int | None, creator_pid: int) -> None:
     if os.getpid() != creator_pid:
         return
     if owner_fd is not None:
+        # The flock belongs to the open file, so a forked child that keeps running still holds it
+        # through its inherited descriptor: closing ours first, a root whose owner lock is still
+        # held outlives this exit and is left for the next sweep to reclaim (#157742).
         with contextlib.suppress(OSError):
             os.close(owner_fd)
+        if _owner_held(root):
+            return
     shutil.rmtree(root, ignore_errors=True)
+
+
+def _owner_held(root: Path) -> bool:
+    """Whether someone else still holds *root*'s owner lock."""
+    from pm.filesystem import lock_fd, unlock_fd
+
+    try:
+        fd = os.open(root / _OWNER_LOCK, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        if lock_fd(fd, wait=False):
+            unlock_fd(fd)
+            return False
+        return True
+    finally:
+        os.close(fd)
 
 
 def _new_root() -> Path:
