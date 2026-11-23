@@ -134,10 +134,10 @@ def _widen_status_check(conn: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def _transaction() -> Iterator[sqlite3.Connection]:
+def _transaction(immediate: bool = False) -> Iterator[sqlite3.Connection]:
     from hermes_cli.sqlite_util import transaction
 
-    with _lock, transaction(_connect()) as conn:
+    with _lock, transaction(_connect(), immediate=immediate) as conn:
         yield conn
 
 
@@ -417,7 +417,10 @@ def recover_receipted_execution(execution_id, job_id, *, success, error=None, de
 
     now = _hermes_now().isoformat()
     detail = None if success else sanitize_persisted_error(str(error) if error else 'unknown failure')
-    with _transaction() as conn:
+    # BEGIN IMMEDIATE: the body reads then writes in one txn. A deferred txn that upgrades
+    # mid-flight gets SQLITE_BUSY_SNAPSHOT when a sibling writer committed since the read,
+    # and the busy handler does not cover that failure (#159176).
+    with _transaction(immediate=True) as conn:
         row = _recoverable_row(conn, execution_id, job_id)
         if row is None or _row_owner_live(row):
             return None
