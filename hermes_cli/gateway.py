@@ -4308,6 +4308,22 @@ def _guard_existing_gateway_process_conflict(replace: bool = False) -> None:
             pass
         return
 
+    try:
+        from gateway.status import _read_process_cmdline, looks_like_gateway_runtime_command_line
+        live_cmdline = _read_process_cmdline(pid)
+    except Exception:
+        logger.debug("Gateway pid identity probe failed", exc_info=True)
+        live_cmdline = None
+    if not live_cmdline or not looks_like_gateway_runtime_command_line(live_cmdline):
+        # An identity that cannot be verified is not proof of a running gateway: after a reboot
+        # Windows hands the stale PID number to a process this user cannot open (ACCESS_DENIED),
+        # which makes the liveness chain degrade to "record looks valid" and wedges every start
+        # until the foreign process releases the number (#159631). The authoritative runtime lock
+        # claim inside start_gateway still refuses a genuine second instance.
+        logger.warning(
+            "PID %s from the gateway identity records is not verifiably a gateway "
+            "(command line unreadable or foreign); continuing to the lock claim.", pid)
+        return
     print_error(f"A gateway is already running (PID {pid}), so your bots are most likely online already.")
     print("  Check with `hermes gateway status`.")
     print("  To restart it: `hermes gateway restart`. To stop it: `hermes gateway stop`.")
