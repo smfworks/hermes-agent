@@ -161,6 +161,24 @@ describe('inline math tokenization', () => {
     expect(dollarMatches('$5-$10')).toEqual([])
   })
 
+  it('does not match letter-prefixed currency across amounts (BRL-style)', () => {
+    // Regression from review: `R$14,90` was accepted as an opener (letter
+    // before `$`, digit after) and the next amount's `$` closed it, eating
+    // everything between two prices on one line.
+    expect(dollarMatches('custam R$14,90 e R$29,90 no total')).toEqual([])
+    expect(dollarMatches('US$29 ≈ R$171')).toEqual([])
+  })
+
+  it('still matches real math on a line that also carries letter-prefixed currency', () => {
+    expect(dollarMatches('math $x^2$ and price R$14,90')).toEqual(['$x^2$'])
+  })
+
+  it('leaves letter-prefixed currency prose untouched in stripped markup', () => {
+    expect(stripInlineMarkup('custam R$14,90 e R$29,90 no total')).toBe(
+      'custam R$14,90 e R$29,90 no total'
+    )
+  })
+
   it('does not let inline math swallow a $$ display fence', () => {
     // `$$x$$` is a display block, not two abutting inline-math spans.
     expect(dollarMatches('$$x$$')).toEqual([])
