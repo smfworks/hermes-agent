@@ -403,6 +403,10 @@ def _sanitize_message(
     ``mistral_tool_ids`` maps the call ``id`` and the result ``tool_call_id`` through
     ``_mistral_tool_id`` from the pairing key the result writers use (``coalesce_tool_call_id``:
     ``call_id`` first, call half of a composite ``call|item`` id), so each pair stays matched.
+    A tool result whose ``content`` is a dict is copied to a compact JSON string. Strict
+    chat-completions validators require ``messages.N.tool.content`` to be a string; stored
+    history keeps the dict. List content is left alone — that shape is the multimodal
+    tool-result path, with its own recovery when a provider rejects it.
     """
     if not isinstance(msg, dict):
         return None
@@ -432,6 +436,16 @@ def _sanitize_message(
             remapped = True
     if kept_details:
         out_msg["reasoning_details"] = kept_details
+    content_stringified = False
+    if msg.get("role") == "tool" and isinstance(msg.get("content"), dict):
+        # Wire copy only. History keeps the structured dict (#160702).
+        try:
+            out_msg["content"] = json.dumps(
+                msg["content"], ensure_ascii=False, separators=(",", ":"), default=str,
+            )
+        except (TypeError, ValueError):
+            out_msg["content"] = str(msg["content"])
+        content_stringified = True
     tool_calls = msg.get("tool_calls")
     copied_tool_calls = None
     if msg.get("role") == "assistant" and "tool_calls" in msg and (tool_calls is None or (isinstance(tool_calls, list) and not tool_calls)):
@@ -456,7 +470,7 @@ def _sanitize_message(
                     copied_tool_calls[tc_idx]["id"] = mapped
         if copied_tool_calls is not None:
             out_msg["tool_calls"] = copied_tool_calls
-    return out_msg if strip_keys or remapped or copied_tool_calls is not None else None
+    return out_msg if strip_keys or remapped or copied_tool_calls is not None or content_stringified else None
 
 
 class ChatCompletionsTransport(ProviderTransport):

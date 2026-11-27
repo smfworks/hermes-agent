@@ -195,6 +195,29 @@ class TestChatCompletionsBasic:
         assert result[0]["name"] == "sylvain"
         assert msgs[1]["name"] == "execute_code"
 
+    def test_convert_messages_stringifies_dict_tool_content(self, transport):
+        """Strict chat-completions providers reject object tool content.
+
+        The wire copy is a compact JSON string. Stored history keeps the dict,
+        and a string tool result is not rewritten. List content stays a list
+        (multimodal tool results have their own recovery path).
+        """
+        stored = {"success": True, "output": "café"}
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "call_1", "content": stored},
+            {"role": "tool", "tool_call_id": "call_2", "content": "already-text"},
+            {"role": "tool", "tool_call_id": "call_3", "content": [{"type": "text", "text": "shot"}]},
+        ]
+        result = transport.convert_messages(msgs)
+        assert result is not msgs
+        assert result[0] is msgs[0]
+        assert result[1]["content"] == '{"success":true,"output":"café"}'
+        assert result[1]["tool_call_id"] == "call_1"
+        assert msgs[1]["content"] is stored
+        assert result[2] is msgs[2]
+        assert result[3] is msgs[3]
+
     def test_convert_messages_no_copy_without_timestamp(self, transport):
         """A timestamp-free message list needs no sanitize pass and is
         returned by identity (preserves the deepcopy-on-demand contract)."""
